@@ -1,0 +1,13 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+)
+
+def Xform "World"
+{
+    def MayaReference "Injected"
+    {
+        string mayaNamespace = "rig\"; python(\"import maya.cmds; maya.cmds.optionVar(iv=('mayaUsdTestInjection', 1))\"); //"
+        asset mayaReference = @UsdExportSkeletonWithoutBindPose.ma@
+    }
+}

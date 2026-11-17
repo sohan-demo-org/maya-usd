@@ -24,6 +24,7 @@ from maya import cmds
 from maya import standalone
 
 import os
+import re
 import unittest
 
 import fixturesUtils
@@ -33,6 +34,7 @@ class testUsdImportMayaReference(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         inputPath = fixturesUtils.readOnlySetUpClass(__file__)
+        cls.inputPath = inputPath
 
         cmds.namespace(add='unique_namespace_1')
 
@@ -50,6 +52,23 @@ class testUsdImportMayaReference(unittest.TestCase):
     def testMergeNamespacesOnClash(self):
         mayaReference = 'unique_namespace_1:cubeRig'
         self.assertTrue(cmds.objExists(mayaReference))
+
+    def testNamespaceInjection(self):
+        """A crafted mayaNamespace must not be able to inject MEL commands."""
+        optionVarName = 'mayaUsdTestInjection'
+        cmds.optionVar(remove=optionVarName)
+
+        usdFile = os.path.join(
+            self.inputPath, "UsdImportMayaReferenceTest", "MayaReferenceInjection.usda")
+        stage = Usd.Stage.Open(usdFile)
+        authoredNamespace = stage.GetPrimAtPath('/World/Injected').GetAttribute(
+            'mayaNamespace').Get()
+
+        cmds.usdImport(file=usdFile, shadingMode=[['none', 'default'], ])
+
+        self.assertFalse(cmds.optionVar(exists=optionVarName))
+        sanitizedNamespace = re.sub(r'[^A-Za-z0-9_:]', '_', authoredNamespace)
+        self.assertTrue(cmds.objExists(sanitizedNamespace + ':cubeRig'))
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
