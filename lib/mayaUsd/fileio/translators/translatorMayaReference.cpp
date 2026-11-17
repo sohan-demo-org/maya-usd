@@ -199,6 +199,42 @@ MString GetMayaRefCustomAttribute(const UsdPrim& prim)
     return value.Get<std::string>().c_str();
 }
 
+// Return the given value as a double-quoted MEL string literal, escaping characters
+// that would otherwise terminate the literal or be interpreted as escape sequences.
+MString quoteMelString(const MString& value)
+{
+    const std::string input(value.asChar());
+    std::string       quoted;
+    quoted.reserve(input.size() + 2);
+    quoted += '"';
+    for (const char c : input) {
+        switch (c) {
+        case '\\': quoted += "\\\\"; break;
+        case '"': quoted += "\\\""; break;
+        case '\n': quoted += "\\n"; break;
+        case '\r': quoted += "\\r"; break;
+        case '\t': quoted += "\\t"; break;
+        default: quoted += c; break;
+        }
+    }
+    quoted += '"';
+    return MString(quoted.c_str());
+}
+
+// Maya namespaces may only contain letters, digits, underscores and ':' separators.
+// Replace any other character with an underscore.
+std::string sanitizeNamespace(const std::string& ns)
+{
+    std::string sanitized(ns);
+    for (char& c : sanitized) {
+        const bool valid = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+            || (c >= '0' && c <= '9') || c == '_' || c == ':';
+        if (!valid)
+            c = '_';
+    }
+    return sanitized;
+}
+
 MStatus LoadOrUnloadMayaReferenceWithUndo(const MObject& referenceObject, bool load)
 {
     MStatus status = MS::kSuccess;
@@ -211,7 +247,8 @@ MStatus LoadOrUnloadMayaReferenceWithUndo(const MObject& referenceObject, bool l
     //       -preserveUndo flag to avoid flushing the undo queue.
     MString referenceNodeName = referenceNodeFn.name();
     MString loadOrUnloadFlag = load ? "-lr" : "-ur";
-    MString loadCommand = "file -preserveUndo true " + loadOrUnloadFlag + " " + referenceNodeName;
+    MString loadCommand
+        = "file -preserveUndo true " + loadOrUnloadFlag + " " + quoteMelString(referenceNodeName);
     status = MGlobal::executeCommand(loadCommand);
 
     return status;
@@ -250,6 +287,17 @@ MString namespaceFromPrim(const UsdPrim& prim)
             // Creating default namespace from prim path. Converts /a/b/c to a_b_c.
             ns = prim.GetPath().GetString();
             std::replace(ns.begin() + 1, ns.end(), '/', '_');
+        } else {
+            const std::string sanitized = sanitizeNamespace(ns);
+            if (sanitized != ns) {
+                TF_WARN(
+                    "Invalid characters in Maya namespace \"%s\" on prim \"%s\" were replaced "
+                    "with underscores: \"%s\".",
+                    ns.c_str(),
+                    prim.GetPath().GetText(),
+                    sanitized.c_str());
+                ns = sanitized;
+            }
         }
     }
     return MString(ns.c_str(), ns.size());
@@ -341,8 +389,8 @@ MStatus UsdMayaTranslatorMayaReference::CreateMayaReference(
                                    + mergeNamespacesOnClashArg
                                    + " -ignoreVersion"
                                      " -options \"v=0;\""
-                                     " -namespace \"")
-        + rigNamespaceM + "\" \"" + mayaReferencePath + "\"";
+                                     " -namespace ")
+        + quoteMelString(rigNamespaceM) + " " + quoteMelString(mayaReferencePath);
 
     TF_DEBUG(PXRUSDMAYA_TRANSLATORS)
         .Msg(
@@ -665,7 +713,8 @@ MStatus UsdMayaTranslatorMayaReference::update(const UsdPrim& prim, MObject pare
     if (status) {
         MString      command, filepath;
         MFnReference fnReference(refNode);
-        command = MString("referenceQuery -f -withoutCopyNumber \"") + fnReference.name() + "\"";
+        command
+            = MString("referenceQuery -f -withoutCopyNumber ") + quoteMelString(fnReference.name());
         MGlobal::executeCommand(command, filepath);
         TF_DEBUG(PXRUSDMAYA_TRANSLATORS)
             .Msg(
@@ -677,11 +726,10 @@ MStatus UsdMayaTranslatorMayaReference::update(const UsdPrim& prim, MObject pare
 
         if (prim.IsActive()) {
             if (mayaReferencePath.length() != 0 && filepath != mayaReferencePath) {
-                command = "file -preserveUndo true -loadReference \"";
-                command += fnReference.name();
-                command += "\" \"";
-                command += mayaReferencePath;
-                command += "\"";
+                command = "file -preserveUndo true -loadReference ";
+                command += quoteMelString(fnReference.name());
+                command += " ";
+                command += quoteMelString(mayaReferencePath);
                 TF_DEBUG(PXRUSDMAYA_TRANSLATORS)
                     .Msg(
                         "MayaReferenceLogic::update prim=%s execute %s\n",
@@ -716,11 +764,10 @@ MStatus UsdMayaTranslatorMayaReference::update(const UsdPrim& prim, MObject pare
                             prim.GetPath().GetText(),
                             refNamespace.asChar());
                     if (refNamespace != rigNamespace.c_str()) {
-                        command = "file -preserveUndo true -e -ns \"";
-                        command += rigNamespace.c_str();
-                        command += "\" \"";
-                        command += filepath;
-                        command += "\"";
+                        command = "file -preserveUndo true -e -ns ";
+                        command += quoteMelString(rigNamespaceM);
+                        command += " ";
+                        command += quoteMelString(filepath);
                         TF_DEBUG(PXRUSDMAYA_TRANSLATORS)
                             .Msg(
                                 "MayaReferenceLogic::update prim=%s execute %s\n",
